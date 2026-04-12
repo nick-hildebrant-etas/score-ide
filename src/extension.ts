@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { SERVICES } from './services';
+import { ServicesProvider } from './servicesProvider';
 
 interface PipelineFn {
   name: string;
@@ -30,7 +32,7 @@ class DaggerPipelinesProvider implements vscode.TreeDataProvider<PipelineItem> {
   }
 
   async getChildren(): Promise<PipelineItem[]> {
-    const pipelinesDir = this.resolvePipelinesDir();
+    const pipelinesDir = resolvePipelinesDir();
     if (!pipelinesDir) {
       return [this.placeholder('No workspace open')];
     }
@@ -48,17 +50,6 @@ class DaggerPipelinesProvider implements vscode.TreeDataProvider<PipelineItem> {
       const msg = err instanceof Error ? err.message : String(err);
       return [this.placeholder(`dagger functions failed: ${msg}`)];
     }
-  }
-
-  resolvePipelinesDir(): string | undefined {
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!workspaceRoot) {
-      return undefined;
-    }
-    const sub: string = vscode.workspace
-      .getConfiguration('score-ide')
-      .get('pipelinesDir', '');
-    return sub ? path.join(workspaceRoot, sub) : workspaceRoot;
   }
 
   private daggerFunctions(cwd: string): Promise<PipelineFn[]> {
@@ -112,13 +103,37 @@ function parseDaggerFunctions(output: string): PipelineFn[] {
   return results;
 }
 
-export function activate(context: vscode.ExtensionContext) {
-  const provider = new DaggerPipelinesProvider();
+function resolvePipelinesDir(): string | undefined {
+  const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!workspaceRoot) {
+    return undefined;
+  }
+  const sub: string = vscode.workspace
+    .getConfiguration('score-ide')
+    .get('pipelinesDir', '');
+  return sub ? path.join(workspaceRoot, sub) : workspaceRoot;
+}
 
-  const treeView = vscode.window.createTreeView('score-ide.pipelinesView', {
-    treeDataProvider: provider,
+export function activate(context: vscode.ExtensionContext) {
+  // ── Pipelines panel ────────────────────────────────────────────────────────
+
+  const pipelinesProvider = new DaggerPipelinesProvider();
+
+  const pipelinesView = vscode.window.createTreeView('score-ide.pipelinesView', {
+    treeDataProvider: pipelinesProvider,
     showCollapseAll: false,
   });
+
+  // ── Services panel ─────────────────────────────────────────────────────────
+
+  const servicesProvider = new ServicesProvider(resolvePipelinesDir);
+
+  const servicesView = vscode.window.createTreeView('score-ide.servicesView', {
+    treeDataProvider: servicesProvider,
+    showCollapseAll: false,
+  });
+
+  // ── Commands ───────────────────────────────────────────────────────────────
 
   const runCmd = vscode.commands.registerCommand(
     'score-ide.runPipeline',
@@ -132,31 +147,60 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       const repoArg = repo ? `--repo ${repo} ` : '';
-      const pipelinesDir = provider.resolvePipelinesDir();
+      const pipelinesDir = resolvePipelinesDir();
+
       const terminal = vscode.window.createTerminal({
         name: `dagger: ${item.fn.name}`,
         cwd: pipelinesDir,
-        env: { DAGGER_NO_NAG: '1' },
+        // Merge OTel (and any other service) env vars so Dagger's engine-level
+        // tracing flows to running collectors without any pipeline-function changes.
+        env: { DAGGER_NO_NAG: '1', ...servicesProvider.bindEnv() },
       });
       terminal.show();
       terminal.sendText(`dagger call ${item.fn.name} ${repoArg}--source .`);
     }
   );
 
-  const refreshCmd = vscode.commands.registerCommand('score-ide.refreshPipelines', () => {
-    provider.refresh();
+  const refreshPipelinesCmd = vscode.commands.registerCommand('score-ide.refreshPipelines', () => {
+    pipelinesProvider.refresh();
   });
 
-  // Re-list when the setting changes
+  const startServiceCmd = vscode.commands.registerCommand(
+    'score-ide.startService',
+    (item: { def: (typeof SERVICES)[number] }) => {
+      servicesProvider.startService(item.def);
+    }
+  );
+
+  const stopServiceCmd = vscode.commands.registerCommand(
+    'score-ide.stopService',
+    (item: { def: (typeof SERVICES)[number] }) => {
+      servicesProvider.stopService(item.def);
+    }
+  );
+
+  const refreshServicesCmd = vscode.commands.registerCommand('score-ide.refreshServices', () => {
+    servicesProvider.refresh();
+  });
+
+  // Re-list pipelines when the setting changes
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('score-ide.pipelinesDir')) {
-        provider.refresh();
+        pipelinesProvider.refresh();
       }
     })
   );
 
-  context.subscriptions.push(treeView, runCmd, refreshCmd);
+  context.subscriptions.push(
+    pipelinesView,
+    servicesView,
+    runCmd,
+    refreshPipelinesCmd,
+    startServiceCmd,
+    stopServiceCmd,
+    refreshServicesCmd,
+  );
 }
 
 export function deactivate() {}

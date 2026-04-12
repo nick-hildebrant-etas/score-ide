@@ -20,13 +20,21 @@
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
   "mounts": [
-    "source=claude-data,target=/home/node/.claude,type=volume"
+    "source=claude-data,target=/home/node/.claude,type=volume",
+    "source=${localWorkspaceFolder}/../scorenado,target=/workspaces/scorenado,type=bind,readonly"
   ],
   "remoteEnv": {
     "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
     "DAGGER_NO_NAG": "1"
   },
-  "forwardPorts": [],
+  "forwardPorts": [4318],
+  "portsAttributes": {
+    "4318": {
+      "label": "OTel Web UI",
+      "protocol": "http",
+      "onAutoForward": "openBrowser"
+    }
+  },
   "postCreateCommand": ".devcontainer/post-create.sh",
   "postStartCommand": "sudo chown node:node /home/node/.claude",
   "remoteUser": "node"

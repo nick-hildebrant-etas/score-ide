@@ -5,7 +5,7 @@ import jsonc from "eslint-plugin-jsonc";
 export default [
   // Ignore generated/vendor directories globally
   {
-    ignores: ["out/**", "pipelines/node_modules/**"],
+    ignores: ["out/**", "pipelines/node_modules/**", "pipelines/sdk/**", "pipelines/out/**", ".vscode-test/**"],
   },
 
   // TypeScript sources — extension + pipelines module

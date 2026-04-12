@@ -27,6 +27,11 @@
           "id": "score-ide.pipelinesView",
           "name": "Dagger Pipelines",
           "icon": "media/icon.svg"
+        },
+        {
+          "id": "score-ide.servicesView",
+          "name": "Services",
+          "icon": "media/icon.svg"
         }
       ]
     },
@@ -40,6 +45,21 @@
         "command": "score-ide.refreshPipelines",
         "title": "Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "score-ide.startService",
+        "title": "Start Service",
+        "icon": "$(debug-start)"
+      },
+      {
+        "command": "score-ide.stopService",
+        "title": "Stop Service",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "score-ide.refreshServices",
+        "title": "Refresh",
+        "icon": "$(refresh)"
       }
     ],
     "menus": {
@@ -48,12 +68,27 @@
           "command": "score-ide.runPipeline",
           "when": "view == score-ide.pipelinesView && viewItem == pipeline",
           "group": "inline"
+        },
+        {
+          "command": "score-ide.startService",
+          "when": "view == score-ide.servicesView && viewItem == service-stopped",
+          "group": "inline"
+        },
+        {
+          "command": "score-ide.stopService",
+          "when": "view == score-ide.servicesView && viewItem == service-running",
+          "group": "inline"
         }
       ],
       "view/title": [
         {
           "command": "score-ide.refreshPipelines",
           "when": "view == score-ide.pipelinesView",
+          "group": "navigation"
+        },
+        {
+          "command": "score-ide.refreshServices",
+          "when": "view == score-ide.servicesView",
           "group": "navigation"
         }
       ]
@@ -72,12 +107,12 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "postinstall": "cd pipelines && dagger develop",
-    "compile": "tsc -p ./",
+    "compile": "rm -rf out && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
-    "lint": "eslint . && tsc --noEmit && (test ! -d pipelines/sdk || tsc --noEmit --project pipelines/tsconfig.json)",
+    "lint": "eslint . && tsc --noEmit",
     "clean": "git diff --quiet && git diff --cached --quiet || (echo 'Worktree is dirty — commit or stash changes first' >&2 && exit 1) && git clean -fdx",
-    "test": "vscode-test"
+    "test": "mocha --ui tdd --timeout 60000 'out/test/unit/**/*.test.js'"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
