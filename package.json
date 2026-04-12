@@ -60,6 +60,11 @@
         "command": "score-ide.refreshServices",
         "title": "Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "score-ide.openServiceBrowser",
+        "title": "Open in Browser Preview",
+        "icon": "$(open-preview)"
       }
     ],
     "menus": {
@@ -76,6 +81,11 @@
         },
         {
           "command": "score-ide.stopService",
+          "when": "view == score-ide.servicesView && viewItem == service-running",
+          "group": "inline"
+        },
+        {
+          "command": "score-ide.openServiceBrowser",
           "when": "view == score-ide.servicesView && viewItem == service-running",
           "group": "inline"
         }
@@ -112,7 +122,7 @@
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint . && tsc --noEmit",
     "clean": "git diff --quiet && git diff --cached --quiet || (echo 'Worktree is dirty — commit or stash changes first' >&2 && exit 1) && git clean -fdx",
-    "test": "mocha --ui tdd --timeout 60000 'out/test/unit/**/*.test.js'"
+    "test": "mocha --ui tdd --timeout 1 'out/test/unit/**/*.test.js'"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

@@ -1,8 +1,8 @@
-import * as vscode from 'vscode';
-import * as cp from 'child_process';
-import { ServiceDef, SERVICES } from './services';
+import * as vscode from "vscode";
+import * as cp from "child_process";
+import { ServiceDef, SERVICES } from "./services";
 
-type ServiceStatus = 'stopped' | 'starting' | 'running' | 'stopping';
+type ServiceStatus = "stopped" | "starting" | "running" | "stopping";
 
 interface ServiceState {
   status: ServiceStatus;
@@ -18,25 +18,25 @@ class ServiceItem extends vscode.TreeItem {
     super(def.label, vscode.TreeItemCollapsibleState.None);
 
     switch (state.status) {
-      case 'stopped':
-        this.iconPath = new vscode.ThemeIcon('debug-start');
-        this.description = 'Stopped';
-        this.contextValue = 'service-stopped';
+      case "stopped":
+        this.iconPath = new vscode.ThemeIcon("debug-start");
+        this.description = "Stopped";
+        this.contextValue = "service-stopped";
         break;
-      case 'starting':
-        this.iconPath = new vscode.ThemeIcon('loading~spin');
-        this.description = 'Starting\u2026';
-        this.contextValue = 'service-starting';
+      case "starting":
+        this.iconPath = new vscode.ThemeIcon("loading~spin");
+        this.description = "Starting\u2026";
+        this.contextValue = "service-starting";
         break;
-      case 'running':
-        this.iconPath = new vscode.ThemeIcon('circle-filled');
+      case "running":
+        this.iconPath = new vscode.ThemeIcon("circle-filled");
         this.description = `localhost:${state.port ?? def.ports[0]}`;
-        this.contextValue = 'service-running';
+        this.contextValue = "service-running";
         break;
-      case 'stopping':
-        this.iconPath = new vscode.ThemeIcon('loading~spin');
-        this.description = 'Stopping\u2026';
-        this.contextValue = 'service-stopping';
+      case "stopping":
+        this.iconPath = new vscode.ThemeIcon("loading~spin");
+        this.description = "Stopping\u2026";
+        this.contextValue = "service-stopping";
         break;
     }
   }
@@ -47,7 +47,7 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private states = new Map<string, ServiceState>(
-    SERVICES.map(s => [s.id, { status: 'stopped' }])
+    SERVICES.map((s) => [s.id, { status: "stopped" }]),
   );
 
   /** One output channel per service, created lazily and reused across restarts. */
@@ -64,7 +64,9 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
   }
 
   getChildren(): ServiceItem[] {
-    return SERVICES.map(def => new ServiceItem(def, this.states.get(def.id)!));
+    return SERVICES.map(
+      (def) => new ServiceItem(def, this.states.get(def.id)!),
+    );
   }
 
   /**
@@ -77,7 +79,7 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
     const env: Record<string, string> = {};
     for (const def of SERVICES) {
       const state = this.states.get(def.id);
-      if (state?.status === 'running' && def.envVars) {
+      if (state?.status === "running" && def.envVars) {
         Object.assign(env, def.envVars);
       }
     }
@@ -86,51 +88,63 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
 
   startService(def: ServiceDef): void {
     const state = this.states.get(def.id);
-    if (state?.status !== 'stopped') {
+    if (state?.status !== "stopped") {
       return;
     }
 
-    this.setState(def.id, { status: 'starting' });
+    this.setState(def.id, { status: "starting" });
 
     const channel = this.getChannel(def);
     channel.clear();
     channel.show(true /* preserveFocus */);
 
     const pipelinesDir = this.resolvePipelinesDir();
-    const proc = cp.spawn(
-      'dagger',
-      ['call', def.daggerFn, 'up'],
-      { cwd: pipelinesDir, env: { ...process.env, DAGGER_NO_NAG: '1' } }
+    const proc = cp.spawn("dagger", ["call", def.daggerFn, "up"], {
+      cwd: pipelinesDir,
+      env: { ...process.env, DAGGER_NO_NAG: "1" },
+    });
+
+    const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+    proc.stdout.on("data", (chunk: Buffer) =>
+      channel.append(stripAnsi(chunk.toString())),
+    );
+    proc.stderr.on("data", (chunk: Buffer) =>
+      channel.append(stripAnsi(chunk.toString())),
     );
 
-    proc.stdout.on('data', (chunk: Buffer) => channel.append(chunk.toString()));
-    proc.stderr.on('data', (chunk: Buffer) => channel.append(chunk.toString()));
-
-    proc.on('spawn', () => {
-      this.setState(def.id, { status: 'running', process: proc, port: def.ports[0] });
+    proc.on("spawn", () => {
+      this.setState(def.id, {
+        status: "running",
+        process: proc,
+        port: def.ports[0],
+      });
     });
 
-    proc.on('close', (code) => {
-      channel.appendLine(`\n[exited with code ${code ?? '?'}]`);
-      this.setState(def.id, { status: 'stopped' });
+    proc.on("close", (code) => {
+      channel.appendLine(`\n[exited with code ${code ?? "?"}]`);
+      this.setState(def.id, { status: "stopped" });
     });
 
-    proc.on('error', (err) => {
+    proc.on("error", (err) => {
       channel.appendLine(`\n[error: ${err.message}]`);
-      this.setState(def.id, { status: 'stopped' });
+      this.setState(def.id, { status: "stopped" });
     });
   }
 
   stopService(def: ServiceDef): void {
     const state = this.states.get(def.id);
-    if (state?.status !== 'running' || !state.process) {
+    if (state?.status !== "running" || !state.process) {
       return;
     }
 
-    this.setState(def.id, { status: 'stopping', process: state.process, port: state.port });
+    this.setState(def.id, {
+      status: "stopping",
+      process: state.process,
+      port: state.port,
+    });
     // SIGTERM lets Dagger clean up the service container; 'close' handler above
     // will transition state to 'stopped'.
-    state.process.kill('SIGTERM');
+    state.process.kill("SIGTERM");
   }
 
   private getChannel(def: ServiceDef): vscode.OutputChannel {
