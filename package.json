@@ -71,10 +71,11 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
+    "postinstall": "cd pipelines && dagger develop",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
-    "lint": "eslint . && tsc --noEmit && tsc --noEmit --project pipelines/tsconfig.json",
+    "lint": "eslint . && tsc --noEmit && (test ! -d pipelines/sdk || tsc --noEmit --project pipelines/tsconfig.json)",
     "clean": "git diff --quiet && git diff --cached --quiet || (echo 'Worktree is dirty — commit or stash changes first' >&2 && exit 1) && git clean -fdx",
     "test": "vscode-test"
   },

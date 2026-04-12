@@ -16,6 +16,9 @@ fi
 
 npm install
 
+echo "Generating Dagger SDK for pipelines module..."
+(cd pipelines && dagger develop)
+
 echo "Installing Claude Code CLI..."
 npm install -g @anthropic-ai/claude-code
 
