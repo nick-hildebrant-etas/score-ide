@@ -1,0 +1,92 @@
+{
+  "name": "score-ide",
+  "displayName": "score-ide",
+  "description": "Score IDE - Dagger pipeline manager for Scorenado",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "score-ide-sidebar",
+          "title": "Score IDE",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "score-ide-sidebar": [
+        {
+          "id": "score-ide.pipelinesView",
+          "name": "Dagger Pipelines",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "score-ide.runPipeline",
+        "title": "Run Pipeline",
+        "icon": "$(play)"
+      },
+      {
+        "command": "score-ide.refreshPipelines",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "score-ide.runPipeline",
+          "when": "view == score-ide.pipelinesView && viewItem == pipeline",
+          "group": "inline"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "score-ide.refreshPipelines",
+          "when": "view == score-ide.pipelinesView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Score IDE",
+      "properties": {
+        "score-ide.pipelinesDir": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path **relative to the workspace root** containing `dagger.json`. Leave empty to use the workspace root."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint . && tsc --noEmit && tsc --noEmit --project pipelines/tsconfig.json",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.95.0",
+    "@typescript-eslint/eslint-plugin": "^8.17.0",
+    "@typescript-eslint/parser": "^8.17.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "eslint": "^9.14.0",
+    "eslint-plugin-jsonc": "^3.1.2",
+    "typescript": "^5.7.2"
+  }
+}

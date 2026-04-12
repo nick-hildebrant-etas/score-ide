@@ -1,0 +1,7 @@
+{
+  "name": "scorenado-pipelines",
+  "engineVersion": "v0.20.5",
+  "sdk": {
+    "source": "typescript"
+  }
+}

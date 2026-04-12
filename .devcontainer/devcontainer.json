@@ -1,0 +1,33 @@
+{
+  "name": "VS Code Extension Development",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "ms-vscode.extension-test-runner",
+        "amodio.tsl-problem-matcher"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "js/ts.tsdk.path": "node_modules/typescript/lib"
+      }
+    }
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "mounts": [
+    "source=claude-data,target=/home/node/.claude,type=volume"
+  ],
+  "remoteEnv": {
+    "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
+    "DAGGER_NO_NAG": "1"
+  },
+  "forwardPorts": [],
+  "postCreateCommand": ".devcontainer/post-create.sh",
+  "postStartCommand": "sudo chown node:node /home/node/.claude",
+  "remoteUser": "node"
+}

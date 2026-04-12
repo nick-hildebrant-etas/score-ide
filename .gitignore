@@ -1,4 +1,6 @@
 # Logs
+core.*
+
 logs
 *.log
 npm-debug.log*
@@ -137,3 +139,4 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+bin/dagger
