@@ -1,4 +1,5 @@
 /sdk
+/out
 /**/node_modules/**
 /**/.pnpm-store/**
 /.env

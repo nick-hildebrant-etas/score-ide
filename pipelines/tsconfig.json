@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "outDir": "out",
     "moduleResolution": "Node",
     "experimentalDecorators": true,
     "strict": true,
