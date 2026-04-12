@@ -15,31 +15,65 @@ Press **F5** in VS Code to launch the Extension Development Host (opens `score-i
 
 ## Architecture
 
-This is a VS Code extension that surfaces Dagger pipeline functions as a clickable sidebar panel — a UI layer over `dagger functions` / `dagger call` for the [Scorenado](https://github.com/nick-hildebrant-etas/scorenado) multi-repo CI harness.
+This is a VS Code extension with two sidebar panels: a **Dagger Pipelines** panel for running CI pipeline functions, and a **Services** panel for managing long-running Dagger services (collectors, caches, sidecars).
+
+### Source files
+
+| File | Purpose |
+|------|---------|
+| `src/extension.ts` | Extension entry point, command registration, `DaggerPipelinesProvider` |
+| `src/servicesProvider.ts` | `ServicesProvider` — manages service lifecycle and output channels |
+| `src/services.ts` | `SERVICES` constant — declares available services (id, label, daggerFn, ports, envVars) |
 
 ### Extension entry point (`src/extension.ts`)
 
-- **`DaggerPipelinesProvider`** — `TreeDataProvider` that shells out to `dagger functions` in the configured pipelines directory, parses the plain-text table output, and returns `PipelineItem` nodes.
+- **`DaggerPipelinesProvider`** — `TreeDataProvider` that shells out to `dagger functions --progress plain` in the configured pipelines directory, strips ANSI escape codes from stdout, parses the plain-text table, and returns `PipelineItem` nodes.
 - **`PipelineItem`** — `TreeItem` with `contextValue = 'pipeline'`; the inline ▶ button is wired via `package.json` menus.
-- **`score-ide.runPipeline`** — prompts for a repo ID then sends `dagger call <fn> --repo <id> --source .` to a new terminal.
+- **`score-ide.runPipeline`** — prompts for a repo ID then sends `dagger call <fn> --repo <id> --source .` to a new terminal. Injects env vars from any running services (e.g. `OTEL_EXPORTER_OTLP_ENDPOINT`) so Dagger's engine-level tracing flows to the collector automatically.
 - **`score-ide.refreshPipelines`** — fires `onDidChangeTreeData` to re-run discovery.
+- **`score-ide.openServiceBrowser`** — opens `http://localhost:<port>` for the selected service in VS Code's simple browser (`simpleBrowser.api.open`).
 - Config change listener: re-runs discovery when `score-ide.pipelinesDir` changes.
+
+### Services provider (`src/servicesProvider.ts`)
+
+- **`ServicesProvider`** — `TreeDataProvider` over `SERVICES`; manages a `Map<id, ServiceState>` (stopped / starting / running / stopping).
+- **`startService`** — spawns `dagger call <daggerFn> up` as a child process. Stdout and stderr (ANSI-stripped) stream to a dedicated `vscode.OutputChannel` per service.
+- **`stopService`** — sends `SIGTERM` to the child process; Dagger cleans up the service container.
+- **`bindEnv`** — returns merged `envVars` from all currently running services, injected into pipeline terminals.
+- Icons change with state: `debug-start` (stopped), `loading~spin` (starting/stopping), `circle-filled` (running).
 
 ### `package.json` contributions
 
-- **View**: `score-ide.pipelinesView` inside the `score-ide-sidebar` activity-bar container.
-- **Commands**: `score-ide.runPipeline` (inline play button, only when `viewItem == pipeline`) and `score-ide.refreshPipelines` (title bar).
+- **Views**: `score-ide.pipelinesView` and `score-ide.servicesView` inside the `score-ide-sidebar` activity-bar container.
+- **Commands**:
+  - `score-ide.runPipeline` — inline ▶, only when `viewItem == pipeline`
+  - `score-ide.refreshPipelines` — title bar of pipelines view
+  - `score-ide.startService` — inline, only when `viewItem == service-stopped`
+  - `score-ide.stopService` — inline, only when `viewItem == service-running`
+  - `score-ide.refreshServices` — title bar of services view
+  - `score-ide.openServiceBrowser` — inline `$(open-preview)`, only when `viewItem == service-running`
 - **Setting**: `score-ide.pipelinesDir` — path relative to workspace root containing `dagger.json`. Empty = workspace root.
 
 ### Dagger module (`pipelines/`)
 
-A TypeScript Dagger SDK module (`dagger.json` + `src/index.ts`) with three functions that mirror Scorenado's Makefile targets:
+A TypeScript Dagger SDK module (dagger v0.20.5, `dagger.json` + `src/index.ts`) with pipeline functions and service functions:
+
+**Pipeline functions:**
 
 | Dagger function | Equivalent Makefile target |
 |-----------------|---------------------------|
 | `build`         | `make build/<repo>`        |
 | `test`          | `make test/<repo>`         |
 | `shell`         | `make shell/<repo>`        |
+
+**Service functions** (exposed via `dagger call <fn> up`):
+
+| Dagger function      | Port | Description |
+|----------------------|------|-------------|
+| `otel-webui`         | 4318 | OTel collector + web UI (`ghcr.io/metafab/otel-gui`) |
+| `ocr`                | 8080 | OCR sidecar service |
+| `pip-mirror`         | 3141 | PyPI mirror (devpi) |
+| `bazel-remote-cache` | 9090 | Bazel remote cache over HTTP |
 
 The `score-ide.code-workspace` file sets `score-ide.pipelinesDir` to `"pipelines"` so F5 works out of the box.
 
