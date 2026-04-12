@@ -91,7 +91,7 @@ class DaggerPipelinesProvider implements vscode.TreeDataProvider<PipelineItem> {
  */
 const ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
 
-function parseDaggerFunctions(output: string): PipelineFn[] {
+export function parseDaggerFunctions(output: string): PipelineFn[] {
   const results: PipelineFn[] = [];
 
   for (const line of output.replace(ANSI_RE, "").split("\n")) {

@@ -119,7 +119,8 @@
     "postinstall": "cd pipelines && dagger develop",
     "compile": "rm -rf out && tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "pretest": "npm run compile && npm run lint",
+    "pretest": "npm run compile && npm run lint && tsc -p pipelines/tsconfig.json --noEmit",
+    "test:suite": "vscode-test",
     "lint": "eslint . && tsc --noEmit",
     "clean": "git diff --quiet && git diff --cached --quiet || (echo 'Worktree is dirty — commit or stash changes first' >&2 && exit 1) && git clean -fdx",
     "test": "mocha --ui tdd --timeout 1 'out/test/unit/**/*.test.js'"
