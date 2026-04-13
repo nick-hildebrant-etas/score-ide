@@ -124,6 +124,8 @@ function resolvePipelinesDir(): string | undefined {
   return sub ? path.join(workspaceRoot, sub) : workspaceRoot;
 }
 
+let _servicesProvider: ServicesProvider | undefined;
+
 export function activate(context: vscode.ExtensionContext) {
   // ── Pipelines panel ────────────────────────────────────────────────────────
 
@@ -140,6 +142,7 @@ export function activate(context: vscode.ExtensionContext) {
   // ── Services panel ─────────────────────────────────────────────────────────
 
   const servicesProvider = new ServicesProvider(resolvePipelinesDir);
+  _servicesProvider = servicesProvider;
 
   const servicesView = vscode.window.createTreeView("score-ide.servicesView", {
     treeDataProvider: servicesProvider,
@@ -197,9 +200,12 @@ export function activate(context: vscode.ExtensionContext) {
 
   const openServiceBrowserCmd = vscode.commands.registerCommand(
     "score-ide.openServiceBrowser",
-    (item: { def: (typeof SERVICES)[number] }) => {
-      const url = `http://localhost:${item.def.ports[0]}`;
-      vscode.commands.executeCommand("simpleBrowser.api.open", url);
+    async (item: { def: (typeof SERVICES)[number] }) => {
+      const localUri = vscode.Uri.parse(`http://localhost:${item.def.ports[0]}`);
+      // asExternalUri resolves the VS Code-forwarded address — handles devcontainer
+      // port remapping, Codespaces tunnels, SSH remote, etc.
+      const externalUri = await vscode.env.asExternalUri(localUri);
+      vscode.commands.executeCommand("simpleBrowser.api.open", externalUri.toString());
     },
   );
 
@@ -224,4 +230,6 @@ export function activate(context: vscode.ExtensionContext) {
   );
 }
 
-export function deactivate() {}
+export function deactivate() {
+  _servicesProvider?.stopAll();
+}

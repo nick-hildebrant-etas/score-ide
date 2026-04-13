@@ -286,6 +286,27 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
     }
   }
 
+  /** Stop all running/starting services. Called from extension deactivate(). */
+  stopAll(): void {
+    for (const def of SERVICES) {
+      const state = this.states.get(def.id);
+      if (
+        (state?.status === "running" || state?.status === "starting") &&
+        state.process
+      ) {
+        try {
+          if (state.process.pid !== undefined) {
+            process.kill(-state.process.pid, "SIGTERM");
+          } else {
+            state.process.kill("SIGTERM");
+          }
+        } catch {
+          state.process.kill("SIGTERM");
+        }
+      }
+    }
+  }
+
   private getChannel(def: ServiceDef): vscode.OutputChannel {
     let ch = this.channels.get(def.id);
     if (!ch) {
