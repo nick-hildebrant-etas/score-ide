@@ -212,11 +212,25 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
     channel.clear();
     channel.show(true /* preserveFocus */);
 
+    // Free any stale process (e.g. from a previous VS Code session) that is
+    // still holding the service's host port.  fuser -k sends SIGKILL to the
+    // holder; failure (port already free, fuser unavailable) is silently ignored.
+    for (const port of def.ports) {
+      cp.spawnSync("fuser", ["-k", `${port}/tcp`], { stdio: "ignore" });
+    }
+
     const pipelinesDir = this.resolvePipelinesDir();
     const proc = cp.spawn("dagger", ["call", def.daggerFn, "up"], {
       cwd: pipelinesDir,
       env: { ...process.env, DAGGER_NO_NAG: "1" },
+      // detached=true gives the child its own process group so that when we stop
+      // the service we can send SIGTERM to the whole group (process.kill(-pgid)).
+      // This ensures the Dagger port-forwarder subprocess also exits, releasing
+      // the host TCP tunnel immediately.
+      detached: true,
     });
+    // Unref so the VS Code process itself is not kept alive by this child.
+    proc.unref();
 
     const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
     proc.stdout.on("data", (chunk: Buffer) =>
@@ -256,9 +270,20 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
       process: state.process,
       port: state.port,
     });
-    // SIGTERM lets Dagger clean up the service container; 'close' handler above
-    // will transition state to 'stopped'.
-    state.process.kill("SIGTERM");
+
+    // Kill the entire process group (negative PID) so that Dagger's child
+    // port-forwarder processes are also terminated and release the host TCP
+    // tunnel immediately.  Fallback to killing just the process if the pid is
+    // unavailable for any reason.
+    try {
+      if (state.process.pid !== undefined) {
+        process.kill(-state.process.pid, "SIGTERM");
+      } else {
+        state.process.kill("SIGTERM");
+      }
+    } catch {
+      state.process.kill("SIGTERM");
+    }
   }
 
   private getChannel(def: ServiceDef): vscode.OutputChannel {

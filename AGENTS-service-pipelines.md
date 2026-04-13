@@ -77,6 +77,39 @@ Fix:
   (current logic prefers a non-internal IPv4 interface, eg `172.17.0.4`).
 - Allow override with `SCORE_IDE_SERVICE_HOST`.
 
+### INCORRECT: Kill only the `dagger call` client process on stop
+
+Example failure:
+
+- `stopService` sent `SIGTERM` to `state.process.pid` (the `dagger call` CLI).
+- The CLI exited, but Dagger's internal port-forwarder child processes were in the
+  same process group and survived, keeping the host TCP port bound.
+- Next `dagger call <fn> up` failed immediately: `listen tcp 0.0.0.0:<port>: bind: address already in use`.
+- Service state flipped stopped → starting → stopped without the port ever being free.
+- `--<daggerArg>` was absent from subsequent pipeline calls because state was "stopped".
+
+Why wrong:
+
+- `cp.spawn(...)` without `detached: true` shares the parent's PGID. SIGTERM to a
+  single PID does not reach child processes. Dagger spawns at least one port-forwarder
+  child; that process keeps the host tunnel open.
+
+Fix (already implemented in `servicesProvider.ts`):
+
+- Spawn with `detached: true` so `dagger call up` gets its own process group
+  (PGID == its own PID).
+- Stop with `process.kill(-proc.pid, "SIGTERM")` (negative PID = whole process
+  group). Every process Dagger spawned exits together, releasing the tunnel before
+  state transitions to "stopped".
+- Pair with `proc.unref()` so the VS Code host process is not kept alive by the
+  detached child.
+
+Rule for all future services:
+
+- **Always spawn service processes with `{ detached: true }`.**
+- **Always stop via `process.kill(-proc.pid, signal)`, with fallback to
+  `proc.kill(signal)` if `pid` is undefined.**
+
 ### INCORRECT: Use `withExec` to run long-lived service process
 
 Why wrong:
@@ -129,7 +162,16 @@ async testOtel(otel: Service): Promise<string> {
    - Confirm pipeline function uses `svc.endpoint(...)`, not hardcoded alias port.
 
 3. If service startup fails with `address already in use`
-   - Kill stale tunnels on that port before re-running.
+   - Root cause A: the previous `dagger call up` process group was not fully killed.
+     Dagger's port-forwarder child processes survived and kept the host port bound.
+     Fix already in code: `stopService` sends `SIGTERM` to the whole process group
+     (`process.kill(-pid, "SIGTERM")`), and services are spawned with `detached: true`.
+   - Root cause B: VS Code was restarted / extension reloaded while a service was
+     running. The old `dagger call up` process is now orphaned — the extension has no
+     PID handle, so `stopService` was never called. The port stays bound indefinitely.
+     Fix already in code: `startService` runs `fuser -k <port>/tcp` (synchronously,
+     silently) before spawning the new process, evicting any stale holder regardless
+     of how it got there.
 
 4. If service arg address is wrong in DinD
    - Check resolved host value.
@@ -156,3 +198,8 @@ async testOtel(otel: Service): Promise<string> {
 - Extension-side service arg filtering per function is required and implemented.
 - Endpoint-based pipeline smoke checks are the reliable way to validate host service args.
 - Mocha smoke tests for `test-otel` and `test-ocr` pass without browser/puppeteer.
+- Service processes are spawned with `{ detached: true }` and stopped with
+  `process.kill(-proc.pid, "SIGTERM")` (process group kill) so Dagger's
+  port-forwarder children are terminated and the host TCP tunnel is released on stop.
+- `startService` runs `fuser -k <port>/tcp` before spawning to evict stale holders
+  left over from crashed or reloaded VS Code sessions.
