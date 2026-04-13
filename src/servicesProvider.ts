@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import * as cp from "child_process";
+import * as fs from "fs";
+import * as os from "os";
 import { ServiceDef, SERVICES } from "./services";
 
 type ServiceStatus = "stopped" | "starting" | "running" | "stopping";
@@ -8,6 +10,41 @@ interface ServiceState {
   status: ServiceStatus;
   process?: cp.ChildProcess;
   port?: number;
+}
+
+function resolveServiceHost(): string {
+  const override = process.env.SCORE_IDE_SERVICE_HOST?.trim();
+  if (override) {
+    return override;
+  }
+
+  // In local (non-container) setups, localhost is the expected host service address.
+  if (!fs.existsSync("/.dockerenv")) {
+    return "localhost";
+  }
+
+  const net = os.networkInterfaces();
+  const isIPv4 = (family: string | number): boolean =>
+    family === "IPv4" || family === 4;
+
+  for (const iface of ["eth0", "en0"]) {
+    const entries = net[iface] ?? [];
+    for (const e of entries) {
+      if (isIPv4(e.family) && !e.internal) {
+        return e.address;
+      }
+    }
+  }
+
+  for (const entries of Object.values(net)) {
+    for (const e of entries ?? []) {
+      if (isIPv4(e.family) && !e.internal) {
+        return e.address;
+      }
+    }
+  }
+
+  return "localhost";
 }
 
 class ServiceItem extends vscode.TreeItem {
@@ -50,6 +87,9 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
     SERVICES.map((s) => [s.id, { status: "stopped" }]),
   );
 
+  private readonly serviceHost = resolveServiceHost();
+  private readonly acceptedFlagsCache = new Map<string, Set<string>>();
+
   /** One output channel per service, created lazily and reused across restarts. */
   private channels = new Map<string, vscode.OutputChannel>();
 
@@ -84,6 +124,80 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
       }
     }
     return env;
+  }
+
+  /**
+   * Returns CLI flag pairs for every running service that declares a
+   * `daggerArg`.  These are appended to `dagger call` commands so that
+   * pipeline functions receive the service as a bound Dagger Service argument:
+   *
+   *   --ocr tcp://<service-host>:8080 --pip-mirror tcp://<service-host>:3141 …
+   */
+  bindServiceArgs(): string[] {
+    const args: string[] = [];
+    for (const def of SERVICES) {
+      const state = this.states.get(def.id);
+      if (state?.status === "running" && def.daggerArg) {
+        args.push(
+          `--${def.daggerArg}`,
+          `tcp://${this.serviceHost}:${def.ports[0]}`,
+        );
+      }
+    }
+    return args;
+  }
+
+  /**
+   * Like bindServiceArgs(), but only includes args accepted by the selected
+   * pipeline function.
+   */
+  bindServiceArgsForFunction(fnName: string): string[] {
+    const accepted = this.getAcceptedFlags(fnName);
+    const args: string[] = [];
+    for (const def of SERVICES) {
+      const state = this.states.get(def.id);
+      if (
+        state?.status === "running" &&
+        def.daggerArg &&
+        accepted.has(def.daggerArg)
+      ) {
+        args.push(
+          `--${def.daggerArg}`,
+          `tcp://${this.serviceHost}:${def.ports[0]}`,
+        );
+      }
+    }
+    return args;
+  }
+
+  private getAcceptedFlags(fnName: string): Set<string> {
+    const cached = this.acceptedFlagsCache.get(fnName);
+    if (cached) {
+      return cached;
+    }
+
+    const cwd = this.resolvePipelinesDir();
+    if (!cwd) {
+      return new Set<string>();
+    }
+
+    const res = cp.spawnSync("dagger", ["call", fnName, "--help"], {
+      cwd,
+      env: { ...process.env, DAGGER_NO_NAG: "1" },
+      encoding: "utf8",
+      timeout: 15000,
+    });
+
+    const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`;
+    const flags = new Set<string>();
+
+    const argsSection = out.split(/\nARGUMENTS\n/i)[1] ?? out;
+    for (const m of argsSection.matchAll(/--([a-z0-9][a-z0-9-]*)/gi)) {
+      flags.add(m[1].toLowerCase());
+    }
+
+    this.acceptedFlagsCache.set(fnName, flags);
+    return flags;
   }
 
   startService(def: ServiceDef): void {

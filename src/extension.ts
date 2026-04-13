@@ -150,16 +150,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   const runCmd = vscode.commands.registerCommand(
     "score-ide.runPipeline",
-    async (item: PipelineItem) => {
-      const repo = await vscode.window.showInputBox({
-        prompt: `Repo ID for "${item.fn.name}"`,
-        placeHolder: "e.g. my-service",
-      });
-      if (repo === undefined) {
-        return; // cancelled
-      }
-
-      const repoArg = repo ? `--repo ${repo} ` : "";
+    (item: PipelineItem) => {
       const pipelinesDir = resolvePipelinesDir();
 
       const terminal = vscode.window.createTerminal({
@@ -170,7 +161,9 @@ export function activate(context: vscode.ExtensionContext) {
         env: { DAGGER_NO_NAG: "1", ...servicesProvider.bindEnv() },
       });
       terminal.show();
-      terminal.sendText(`dagger call ${item.fn.name} ${repoArg}--source .`);
+      const svcArgs = servicesProvider.bindServiceArgsForFunction(item.fn.name);
+      const cmd = ["dagger", "call", item.fn.name, ...svcArgs].join(" ");
+      terminal.sendText(cmd);
     },
   );
 

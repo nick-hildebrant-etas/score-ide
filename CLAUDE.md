@@ -40,6 +40,7 @@ This is a VS Code extension with two sidebar panels: a **Dagger Pipelines** pane
 - **`startService`** — spawns `dagger call <daggerFn> up` as a child process. Stdout and stderr (ANSI-stripped) stream to a dedicated `vscode.OutputChannel` per service.
 - **`stopService`** — sends `SIGTERM` to the child process; Dagger cleans up the service container.
 - **`bindEnv`** — returns merged `envVars` from all currently running services, injected into pipeline terminals.
+- **`bindServiceArgs`** — returns `--<daggerArg> tcp://<host>:<port>` pairs for every running service that declares a `daggerArg`. Injected into `dagger call` commands so pipeline functions receive the service as a Dagger `Service` argument.
 - Icons change with state: `debug-start` (stopped), `loading~spin` (starting/stopping), `circle-filled` (running).
 
 ### `package.json` contributions
@@ -71,13 +72,33 @@ A TypeScript Dagger SDK module (dagger v0.20.5, `dagger.json` + `src/index.ts`) 
 | Dagger function      | Port | Description |
 |----------------------|------|-------------|
 | `otel-webui`         | 4318 | OTel collector + web UI (`ghcr.io/metafab/otel-gui`) |
-| `ocr`                | 8080 | OCR sidecar service |
-| `pip-mirror`         | 3141 | PyPI mirror (devpi) |
-| `bazel-remote-cache` | 9090 | Bazel remote cache over HTTP |
+| `ocr`                | 8080 | OCR sidecar (hashicorp/http-echo stub) |
+| `pip-mirror`         | 3141 | PyPI mirror stub (Python http.server) |
+| `bazel-remote-cache` | 9090 | Bazel remote cache stub (Python http.server) |
+| `oci-registry`       | 5000 | OCI registry (`registry:2`) |
+
+**Smoke-test pipeline functions** (prove service-to-pipeline wiring):
+
+| Dagger function | Service arg | What it checks |
+|-----------------|-------------|----------------|
+| `test-otel`     | `--otel`    | OTel endpoint reachable via `svc.endpoint()` + `dag.http()` |
+| `test-ocr`      | `--ocr`     | OCR endpoint returns `{"status":"ok"}` |
 
 The `score-ide.code-workspace` file sets `score-ide.pipelinesDir` to `"pipelines"` so F5 works out of the box.
 
 > **Important:** For workspace-file-based setups (`.code-workspace`), the setting must live inside the workspace file under `"settings"` — not in `.vscode/settings.json`, which is only read for single-folder workspaces.
+
+### Service → pipeline wiring
+
+Services started from the panel are passed to pipeline functions as Dagger `Service` arguments via `tcp://<host>:<port>`. Key rules — see `AGENTS-service-pipelines.md` for full history:
+
+1. **Never use `localhost` as the service host in DinD.** The Dagger engine runs inside Docker; `localhost` resolves to the engine container's loopback, not the devcontainer. Use the routable host IP (e.g. `172.17.0.x`) or `host-gateway`. The extension resolves this automatically; override with `SCORE_IDE_SERVICE_HOST`.
+
+2. **Pipeline functions must filter incoming service args.** Each Dagger function only accepts its declared args. Injecting all running service flags into every `dagger call` causes `unknown flag` errors. The extension filters per-function by inspecting `dagger call <fn> --help`.
+
+3. **Use `svc.endpoint({ scheme: "http" })` + `dag.http(endpoint)` inside pipeline functions**, not hardcoded alias ports. The tunneled endpoint port may differ from the container's exposed port.
+
+4. **Service functions use `.asService({ args: [...] })`**, not `withEntrypoint` + `asService()`. `withExec` is build-time only and must not be used to start long-lived processes.
 
 ### Devcontainer
 

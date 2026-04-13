@@ -5,9 +5,11 @@
  * driven from the score-ide VS Code extension via `dagger call`.
  *
  * Usage (CLI):
- *   dagger call build --repo my-service --source .
- *   dagger call test  --repo my-service --source .
- *   dagger call shell --repo my-service --source .
+ *   dagger call build --source .
+ *   dagger call test  --source .
+ *   dagger call shell --source .
+ *   dagger call test-otel --otel tcp://localhost:4318
+ *   dagger call test-ocr --ocr tcp://localhost:8080
  *
  * OTel tracing:
  *   Dagger's engine-level traces are exported automatically when
@@ -30,7 +32,14 @@
  *   dagger call pip-mirror up
  *   dagger call bazel-remote-cache up
  */
-import { dag, Container, Directory, Service, object, func } from "@dagger.io/dagger";
+import {
+  dag,
+  Container,
+  Directory,
+  Service,
+  object,
+  func,
+} from "@dagger.io/dagger";
 
 @object()
 export class ScorenadoPipelines {
@@ -42,49 +51,83 @@ export class ScorenadoPipelines {
   // source tree mounted, and the Scorenado catalog/secrets available so the
   // generated targets.mk build steps can run.
   @func()
-  async build(repo: string, source: Directory): Promise<string> {
+  async build(source: Directory): Promise<string> {
     return dag
       .container()
       .from("ubuntu:22.04")
       .withDirectory("/workspace", source)
       .withWorkdir("/workspace")
-      .withExec(["bash", "-c", `echo '>>> Building repo: ${repo}' && echo 'Done.'`])
+      .withExec(["bash", "-c", "echo '>>> build placeholder' && echo 'Done.'"])
       .stdout();
   }
 
-  // TODO: Implement real test logic.
-  // This should mirror `make test/<repo>` / `dagger run uv run --script scripts/test.py --repo <repo>`
-  // from the Scorenado Makefile. Same container setup as build; the test runner
-  // (pytest or repo-specific) needs to be invoked and its exit code surfaced so a
-  // non-zero result fails the Dagger step.
+  // TODO: Replace with real per-repo test functions.
   @func()
-  async test(repo: string, source: Directory): Promise<string> {
+  async test(source: Directory): Promise<string> {
     return dag
       .container()
       .from("ubuntu:22.04")
       .withDirectory("/workspace", source)
       .withWorkdir("/workspace")
-      .withExec(["bash", "-c", `echo '>>> Testing repo: ${repo}' && echo 'All tests passed.'`])
+      .withExec([
+        "bash",
+        "-c",
+        "echo '>>> test placeholder' && echo 'All tests passed.'",
+      ])
       .stdout();
   }
 
-  // TODO: Implement real shell logic.
-  // This should mirror `make shell/<repo>` / `dagger run uv run --script scripts/shell.py --repo <repo>`
-  // from the Scorenado Makefile. The container should have the repo's full dev
-  // toolchain installed (same image as build/test) so the interactive shell is
-  // actually useful for debugging.
+  // TODO: Replace with real per-repo shell functions.
   @func()
-  shell(repo: string, source: Directory): Container {
+  shell(source: Directory): Container {
     return dag
       .container()
       .from("ubuntu:22.04")
       .withDirectory("/workspace", source)
       .withWorkdir("/workspace")
-      .withEnvVariable("REPO", repo)
       .terminal();
   }
 
+  /**
+   * End-to-end smoke test for the OTel service binding path.
+   *
+   * Expected usage:
+   *   dagger call test-otel --otel tcp://localhost:4318
+   */
+  @func()
+  async testOtel(otel: Service): Promise<string> {
+    const endpoint = await otel.endpoint({ scheme: "http" });
+    await dag.http(endpoint).contents();
+    return "otel service reachable";
+  }
+
+  /**
+   * End-to-end smoke test for the OCR service binding path.
+   *
+   * Expected usage:
+   *   dagger call test-ocr --ocr tcp://localhost:8080
+   */
+  @func()
+  async testOcr(ocr: Service): Promise<string> {
+    const endpoint = await ocr.endpoint({ scheme: "http" });
+    const body = await dag.http(endpoint).contents();
+    if (!body.includes('"status":"ok"')) {
+      throw new Error(`unexpected OCR response body: ${body}`);
+    }
+    return "ocr service reachable";
+  }
+
   // ── Service functions ──────────────────────────────────────────────────────
+
+  /**
+   * OCI registry (registry:2).
+   * Binds to host port 5000; use `dagger call oci-registry up` to expose it.
+   * testRegistry uses withServiceBinding to hit /v2/ inside the Dagger DAG.
+   */
+  @func()
+  ociRegistry(): Service {
+    return dag.container().from("registry:2").withExposedPort(5000).asService();
+  }
 
   /**
    * OpenTelemetry collector + web UI (ghcr.io/metafab/otel-gui).
@@ -103,40 +146,90 @@ export class ScorenadoPipelines {
 
   /**
    * OCR sidecar service.
+   * TODO: Replace with real OCR image once available.
    */
   @func()
   ocr(): Service {
     return dag
       .container()
-      .from("ubuntu:22.04")
+      .from("hashicorp/http-echo:1.0.0")
       .withExposedPort(8080)
-      .withExec(["bash", "-c", "echo 'OCR service placeholder' && sleep infinity"])
-      .asService();
+      .asService({
+        args: ["-listen=:8080", '-text={"status":"ok"}'],
+        useEntrypoint: true,
+      });
   }
 
   /**
    * Local PyPI mirror for air-gapped builds.
+   * TODO: Replace with real devpi / pypiserver instance.
    */
   @func()
   pipMirror(): Service {
+    const server = `\
+import http.server
+
+SIMPLE_HTML = b"""<!DOCTYPE html>
+<html><head><title>Simple index</title></head>
+<body><h1>Simple index</h1></body></html>
+"""
+
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(SIMPLE_HTML)))
+        self.end_headers()
+        self.wfile.write(SIMPLE_HTML)
+    def log_message(self, *a):
+        pass
+
+http.server.HTTPServer(("", 3141), H).serve_forever()
+`;
     return dag
       .container()
-      .from("ubuntu:22.04")
+      .from("python:3.12-alpine")
+      .withNewFile("/server.py", server)
       .withExposedPort(3141)
-      .withExec(["bash", "-c", "echo 'pip-mirror placeholder' && sleep infinity"])
-      .asService();
+      .asService({ args: ["python3", "/server.py"] });
   }
 
   /**
    * Bazel remote cache over HTTP.
+   * TODO: Replace with real buchgr/bazel-remote instance.
    */
   @func()
   bazelRemoteCache(): Service {
+    const server = `\
+import http.server
+
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/status":
+            body = b'{"state":"ok"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path.startswith("/cas/") or self.path.startswith("/ac/"):
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        else:
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+    def log_message(self, *a):
+        pass
+
+http.server.HTTPServer(("", 9090), H).serve_forever()
+`;
     return dag
       .container()
-      .from("ubuntu:22.04")
+      .from("python:3.12-alpine")
+      .withNewFile("/server.py", server)
       .withExposedPort(9090)
-      .withExec(["bash", "-c", "echo 'bazel-remote-cache placeholder' && sleep infinity"])
-      .asService();
+      .asService({ args: ["python3", "/server.py"] });
   }
 }
