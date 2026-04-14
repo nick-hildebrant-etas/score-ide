@@ -16,7 +16,7 @@
       "activitybar": [
         {
           "id": "score-ide-sidebar",
-          "title": "Score IDE",
+          "title": "score",
           "icon": "media/icon.svg"
         }
       ]
@@ -104,7 +104,7 @@
       ]
     },
     "configuration": {
-      "title": "Score IDE",
+      "title": "score",
       "properties": {
         "score-ide.pipelinesDir": {
           "type": "string",

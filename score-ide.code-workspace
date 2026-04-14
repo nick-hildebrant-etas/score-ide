@@ -5,6 +5,7 @@
     }
   ],
   "settings": {
-    "score-ide.pipelinesDir": "pipelines"
+    "score-ide.pipelinesDir": "pipelines",
+    "workbench.colorTheme": "Monokai"
   }
 }

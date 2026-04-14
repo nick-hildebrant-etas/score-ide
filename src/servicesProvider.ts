@@ -310,7 +310,7 @@ export class ServicesProvider implements vscode.TreeDataProvider<ServiceItem> {
   private getChannel(def: ServiceDef): vscode.OutputChannel {
     let ch = this.channels.get(def.id);
     if (!ch) {
-      ch = vscode.window.createOutputChannel(`Score IDE: ${def.label}`);
+      ch = vscode.window.createOutputChannel(`score: ${def.label}`);
       this.channels.set(def.id, ch);
     }
     return ch;
