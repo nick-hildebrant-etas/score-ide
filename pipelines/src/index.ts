@@ -1,91 +1,107 @@
 /**
- * Scorenado pipeline functions
+ * Scorenado pipeline functions — root module manifest.
  *
- * Mirrors the three core Scorenado Makefile targets so they can be
- * driven from the score-ide VS Code extension via `dagger call`.
+ * This file is intentionally thin: it declares the Dagger API surface and
+ * delegates every implementation to a domain module. Add logic here only
+ * when it cannot belong to any domain module.
  *
- * Usage (CLI):
- *   dagger call build --source .
- *   dagger call test  --source .
- *   dagger call shell --source .
+ * Domain modules:
+ *   repos.ts      — repo registry (RepoConfig, REPOS, getRepo)
+ *   setup.ts      — multi-repo checkout and branch management
+ *   ci.ts         — Bazel build / test / shell (parameterised by RepoConfig)
+ *   otel.ts       — OTel Web UI service + smoke test
+ *   registry.ts   — OCI container registry service + smoke test
+ *   pip-mirror.ts — PyPI mirror service + smoke test
+ *   bazel.ts      — Bazel remote cache service (+ future BuildBarn services)
+ *
+ * CLI quick reference:
+ *   dagger call setup --branch main
+ *   dagger call build --repo score-base --source <workspace>
+ *   dagger call test  --repo score-base --source <workspace>
+ *   dagger call shell --repo score-base --source <workspace>
  *   dagger call test-otel --otel tcp://localhost:4318
- *   dagger call test-ocr --ocr tcp://localhost:8080
- *
- * OTel tracing:
- *   Dagger's engine-level traces are exported automatically when
- *   OTEL_EXPORTER_OTLP_ENDPOINT is set in the calling environment.
- *   The score-ide extension injects this env var when the otel-webui
- *   service is running, so no pipeline-function arguments are needed.
- *
- *   TODO: In-container OTel forwarding (so build/test scripts running
- *   inside the container can also export traces) requires
- *   dag.host().service([PortForward(...)]) to tunnel the host collector
- *   port into the container. That API is available in the Python dagger-io
- *   SDK (see scorenado/scripts/_core/dagger_runtime.py :: bind_otel) but
- *   is not exposed in TypeScript module functions in Dagger v0.20.x.
- *   Until it becomes available, in-container tracing must go via the
- *   Python-script path (dagger run uv run --script scripts/build.py ...).
- *
- * Services (run with `dagger call <fn> up`):
+ *   dagger call test-ocr  --ocr  tcp://localhost:5000
+ *   dagger call test-pypi --pip-mirror tcp://localhost:3141
  *   dagger call otel-webui up
  *   dagger call ocr up
  *   dagger call pip-mirror up
  *   dagger call bazel-remote-cache up
  */
 import {
-  dag,
   Container,
   Directory,
   Service,
   object,
   func,
 } from "@dagger.io/dagger";
+import { otelWebuiService, smokeTestOtel } from "./otel.js";
+import { ociRegistryService, smokeTestOcr } from "./registry.js";
+import { pipMirrorService, smokeTestPypi } from "./pip-mirror.js";
+import { bazelRemoteCacheService } from "./bazel.js";
+import { setupWorkspace } from "./setup.js";
+import { bazelBuild, bazelTest, bazelShell } from "./ci.js";
 
 @object()
 export class ScorenadoPipelines {
-  // ── Pipeline functions ─────────────────────────────────────────────────────
+  // ── Workspace setup ────────────────────────────────────────────────────────
 
-  // TODO: Implement real build logic.
-  // This should mirror `make build/<repo>` / `dagger run uv run --script scripts/build.py --repo <repo>`
-  // from the Scorenado Makefile. The container needs the repo's toolchain, the
-  // source tree mounted, and the Scorenado catalog/secrets available so the
-  // generated targets.mk build steps can run.
+  /**
+   * Check out one or more repos at the specified branch and assemble a
+   * workspace Directory. Pass the result as --source to build/test/shell.
+   *
+   * @param branch       Branch to check out in every requested repo.
+   * @param repos        Comma-separated repo names; omit for all repos.
+   * @param createBranch Create the branch from defaultBranch if it does not
+   *                     exist on the remote (respects per-repo policy).
+   */
   @func()
-  async build(source: Directory): Promise<string> {
-    return dag
-      .container()
-      .from("ubuntu:22.04")
-      .withDirectory("/workspace", source)
-      .withWorkdir("/workspace")
-      .withExec(["bash", "-c", "echo '>>> build placeholder' && echo 'Done.'"])
-      .stdout();
+  async setup(
+    branch: string,
+    repos?: string,
+    createBranch?: boolean,
+  ): Promise<Directory> {
+    return setupWorkspace({ branch, repos, createBranch });
   }
 
-  // TODO: Replace with real per-repo test functions.
+  // ── CI pipelines ───────────────────────────────────────────────────────────
+
+  /**
+   * Build a repo with Bazel inside eclipse/score-devcontainer.
+   * source should be the Directory returned by the setup pipeline.
+   */
   @func()
-  async test(source: Directory): Promise<string> {
-    return dag
-      .container()
-      .from("ubuntu:22.04")
-      .withDirectory("/workspace", source)
-      .withWorkdir("/workspace")
-      .withExec([
-        "bash",
-        "-c",
-        "echo '>>> test placeholder' && echo 'All tests passed.'",
-      ])
-      .stdout();
+  async build(
+    repo: string,
+    source: Directory,
+    otel?: Service,
+    bazelCache?: Service,
+    pipMirror?: Service,
+  ): Promise<string> {
+    return bazelBuild({ repo, source, otel, bazelCache, pipMirror });
   }
 
-  // TODO: Replace with real per-repo shell functions.
+  /**
+   * Test a repo with Bazel inside eclipse/score-devcontainer.
+   * source should be the Directory returned by the setup pipeline.
+   */
   @func()
-  shell(source: Directory): Container {
-    return dag
-      .container()
-      .from("ubuntu:22.04")
-      .withDirectory("/workspace", source)
-      .withWorkdir("/workspace")
-      .terminal();
+  async test(
+    repo: string,
+    source: Directory,
+    otel?: Service,
+    bazelCache?: Service,
+    pipMirror?: Service,
+  ): Promise<string> {
+    return bazelTest({ repo, source, otel, bazelCache, pipMirror });
+  }
+
+  /**
+   * Open an interactive shell inside the eclipse/score-devcontainer for a repo.
+   * source should be the Directory returned by the setup pipeline.
+   */
+  @func()
+  shell(repo: string, source: Directory): Container {
+    return bazelShell({ repo, source });
   }
 
   /**
@@ -96,9 +112,7 @@ export class ScorenadoPipelines {
    */
   @func()
   async testOtel(otel: Service): Promise<string> {
-    const endpoint = await otel.endpoint({ scheme: "http" });
-    await dag.http(endpoint).contents();
-    return "otel service reachable";
+    return smokeTestOtel(otel);
   }
 
   /**
@@ -110,9 +124,7 @@ export class ScorenadoPipelines {
    */
   @func()
   async testOcr(ocr: Service): Promise<string> {
-    const endpoint = await ocr.endpoint({ scheme: "http" });
-    const body = await dag.http(`${endpoint}/v2/`).contents();
-    return `ocr registry reachable: ${body}`;
+    return smokeTestOcr(ocr);
   }
 
   /**
@@ -125,29 +137,7 @@ export class ScorenadoPipelines {
    */
   @func()
   async testPypi(pipMirror: Service): Promise<string> {
-    const endpoint = await pipMirror.endpoint({ scheme: "http" });
-    const port = endpoint.split(":").pop()!;
-    const mirrorUrl = `http://pip-mirror:${port}`;
-
-    const index = await dag
-      .container()
-      .from("ghcr.io/astral-sh/uv:alpine")
-      .withServiceBinding("pip-mirror", pipMirror)
-      .withEnvVariable("TWINE_USERNAME", "dummy")
-      .withEnvVariable("TWINE_PASSWORD", "dummy")
-      .withExec(["uv", "tool", "install", "twine"])
-      .withExec(["uv", "run", "python", "-m", "pip", "download", "numpy", "--dest", "/packages"])
-      .withExec([
-        "sh", "-c",
-        `uv tool run twine upload --repository-url ${mirrorUrl} /packages/*`,
-      ])
-      .withExec(["wget", "-qO-", `${mirrorUrl}/simple/`])
-      .stdout();
-
-    if (!index.includes("numpy")) {
-      throw new Error(`numpy not found in mirror index after upload: ${index}`);
-    }
-    return "pip-mirror: numpy mirrored and verified";
+    return smokeTestPypi(pipMirror);
   }
 
   // ── Service functions ──────────────────────────────────────────────────────
@@ -160,11 +150,7 @@ export class ScorenadoPipelines {
    */
   @func()
   otelWebui(): Service {
-    return dag
-      .container()
-      .from("ghcr.io/metafab/otel-gui:latest")
-      .withExposedPort(4318)
-      .asService();
+    return otelWebuiService();
   }
 
   /**
@@ -173,11 +159,7 @@ export class ScorenadoPipelines {
    */
   @func()
   ocr(): Service {
-    return dag
-      .container()
-      .from("registry:2")
-      .withExposedPort(5000)
-      .asService();
+    return ociRegistryService();
   }
 
   /**
@@ -188,17 +170,7 @@ export class ScorenadoPipelines {
    */
   @func()
   pipMirror(): Service {
-    return dag
-      .container()
-      .from("ghcr.io/astral-sh/uv:alpine")
-      .withExec(["mkdir", "-p", "/data/packages"])
-      .withExposedPort(3141)
-      .asService({
-        args: [
-          "uv", "run", "--with", "pypiserver", "--with", "gunicorn",
-          "pypi-server", "run", "--server", "gunicorn", "-p", "3141", "-a", ".", "-P", ".", "/data/packages",
-        ],
-      });
+    return pipMirrorService();
   }
 
   /**
@@ -207,36 +179,6 @@ export class ScorenadoPipelines {
    */
   @func()
   bazelRemoteCache(): Service {
-    const server = `\
-import http.server
-
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/status":
-            body = b'{"state":"ok"}'
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-        elif self.path.startswith("/cas/") or self.path.startswith("/ac/"):
-            self.send_response(404)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-        else:
-            self.send_response(200)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-    def log_message(self, *a):
-        pass
-
-http.server.HTTPServer(("", 9090), H).serve_forever()
-`;
-    return dag
-      .container()
-      .from("python:3.12-alpine")
-      .withNewFile("/server.py", server)
-      .withExposedPort(9090)
-      .asService({ args: ["python3", "/server.py"] });
+    return bazelRemoteCacheService();
   }
 }

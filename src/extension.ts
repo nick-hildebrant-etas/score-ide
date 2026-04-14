@@ -202,7 +202,7 @@ export function activate(context: vscode.ExtensionContext) {
     "score-ide.openServiceBrowser",
     async (item: { def: (typeof SERVICES)[number] }) => {
       const localUri = vscode.Uri.parse(
-        `http://localhost:${item.def.ports[0]}`,
+        `http://localhost:${item.def.ports[0]}${item.def.browserPath ?? "/"}`,
       );
       // asExternalUri resolves the VS Code-forwarded address — handles devcontainer
       // port remapping, Codespaces tunnels, SSH remote, etc.

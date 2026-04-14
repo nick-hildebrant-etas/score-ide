@@ -18,6 +18,8 @@ export interface ServiceDef {
    * (e.g. `--ocr tcp://localhost:8080`).
    */
   daggerArg?: string;
+  /** Path to open in the simple browser preview (default: "/"). */
+  browserPath?: string;
 }
 
 export const SERVICES: ServiceDef[] = [
@@ -39,6 +41,7 @@ export const SERVICES: ServiceDef[] = [
     daggerFn: "ocr",
     ports: [5000],
     daggerArg: "ocr",
+    browserPath: "/v2/",
   },
   {
     id: "pip-mirror",
