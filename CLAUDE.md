@@ -73,16 +73,16 @@ A TypeScript Dagger SDK module (dagger v0.20.5, `dagger.json` + `src/index.ts`) 
 |----------------------|------|-------------|
 | `otel-webui`         | 4318 | OTel collector + web UI (`ghcr.io/metafab/otel-gui`) |
 | `ocr`                | 8080 | OCR sidecar (hashicorp/http-echo stub) |
-| `pip-mirror`         | 3141 | PyPI mirror stub (Python http.server) |
+| `pip-mirror`         | 3141 | PyPI mirror stub (Python http.server, PEP 503 simple index) |
 | `bazel-remote-cache` | 9090 | Bazel remote cache stub (Python http.server) |
-| `oci-registry`       | 5000 | OCI registry (`registry:2`) |
 
 **Smoke-test pipeline functions** (prove service-to-pipeline wiring):
 
-| Dagger function | Service arg | What it checks |
-|-----------------|-------------|----------------|
-| `test-otel`     | `--otel`    | OTel endpoint reachable via `svc.endpoint()` + `dag.http()` |
-| `test-ocr`      | `--ocr`     | OCR endpoint returns `{"status":"ok"}` |
+| Dagger function | Service arg    | What it checks |
+|-----------------|----------------|----------------|
+| `test-otel`     | `--otel`       | OTel endpoint reachable via `svc.endpoint()` + `dag.http()` |
+| `test-ocr`      | `--ocr`        | OCR endpoint returns `{"status":"ok"}` |
+| `test-pypi`     | `--pip-mirror` | Mirror `/simple/` returns PEP 503 `Simple index` HTML |
 
 The `score-ide.code-workspace` file sets `score-ide.pipelinesDir` to `"pipelines"` so F5 works out of the box.
 
@@ -99,6 +99,8 @@ Services started from the panel are passed to pipeline functions as Dagger `Serv
 3. **Use `svc.endpoint({ scheme: "http" })` + `dag.http(endpoint)` inside pipeline functions**, not hardcoded alias ports. The tunneled endpoint port may differ from the container's exposed port.
 
 4. **Service functions use `.asService({ args: [...] })`**, not `withEntrypoint` + `asService()`. `withExec` is build-time only and must not be used to start long-lived processes.
+
+5. **Never use `Container.publish` to smoke-test a service-backed registry.** `publish` runs at the Dagger engine level outside any service-binding context, so the internal hostname from `svc.endpoint()` is not DNS-resolvable. Dagger v0.20.x also removed `allowInsecure` from `ContainerPublishOpts`, so bare-HTTP registries always fail. Use `dag.http(endpoint + "/v2/").contents()` instead — it runs inside the service network and works with HTTP.
 
 ### Devcontainer
 

@@ -35,9 +35,9 @@ export const SERVICES: ServiceDef[] = [
   },
   {
     id: "ocr",
-    label: "OCR",
+    label: "OCI Registry",
     daggerFn: "ocr",
-    ports: [8080],
+    ports: [5000],
     daggerArg: "ocr",
   },
   {
@@ -46,12 +46,6 @@ export const SERVICES: ServiceDef[] = [
     daggerFn: "pip-mirror",
     ports: [3141],
     daggerArg: "pip-mirror",
-  },
-  {
-    id: "oci-registry",
-    label: "OCI Registry",
-    daggerFn: "oci-registry",
-    ports: [5000],
   },
   {
     id: "bazel-remote-cache",

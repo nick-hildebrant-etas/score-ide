@@ -110,6 +110,37 @@ Rule for all future services:
 - **Always stop via `process.kill(-proc.pid, signal)`, with fallback to
   `proc.kill(signal)` if `pid` is undefined.**
 
+### INCORRECT: Use `Container.publish` to smoke-test a service-backed registry
+
+Example failure:
+
+```
+failed to push in26ioi1au1h4:5000/hello-world:test: failed to do request:
+Head "https://in26ioi1au1h4:5000/v2/...": dial tcp: lookup in26ioi1au1h4: no such host
+```
+
+Why wrong:
+
+- `Container.publish` runs at the Dagger **engine level**, not inside a
+  service-bound container. The hostname returned by `svc.endpoint()` (e.g.
+  `in26ioi1au1h4:5000`) is only resolvable within Dagger's internal service
+  network, which `publish` cannot reach.
+- Dagger also attempts HTTPS by default for any unknown registry host. There is
+  no `allowInsecure` option on `Container.publish` in Dagger v0.20.x (it was
+  removed in an earlier release), so bare-HTTP registries always fail.
+
+Fix:
+
+- Use `dag.http(endpoint).contents()` with the service endpoint, which runs
+  within the service network. For a Docker registry v2, hit `/v2/` — it returns
+  `{}` with 200 OK on a healthy registry:
+
+```ts
+const endpoint = await ocr.endpoint({ scheme: "http" });
+const body = await dag.http(`${endpoint}/v2/`).contents();
+return `ocr registry reachable: ${body}`;
+```
+
 ### INCORRECT: Use `withExec` to run long-lived service process
 
 Why wrong:
@@ -145,10 +176,12 @@ async testOtel(otel: Service): Promise<string> {
 ### Pattern C: Mocha smoke tests (no browser dependency)
 
 - Start services with explicit test port mappings:
-  - OTel: `14318:4318`
-  - OCR: `18080:8080`
+  - OTel: `14318:4318` — health check: `http://localhost:14318/`
+  - OCR (registry:2): `18080:5000` — health check: `http://localhost:18080/v2/`
+  - PyPI mirror: `13141:3141` — health check: `http://localhost:13141/simple/`
 - Pass those mapped ports into pipeline service args.
 - If ports are already up, reuse them instead of failing on bind conflicts.
+- Registry v2 health check must use `/v2/`, not `/` — bare `/` returns 404.
 
 ## Minimal troubleshooting checklist
 
@@ -197,7 +230,9 @@ async testOtel(otel: Service): Promise<string> {
 
 - Extension-side service arg filtering per function is required and implemented.
 - Endpoint-based pipeline smoke checks are the reliable way to validate host service args.
-- Mocha smoke tests for `test-otel` and `test-ocr` pass without browser/puppeteer.
+- Mocha smoke tests for `test-otel`, `test-ocr`, and `test-pypi` pass without browser/puppeteer.
+- `test-ocr` smoke check uses `dag.http(endpoint + "/v2/")`, not `Container.publish`
+  (publish cannot reach Dagger-internal service hostnames and has no insecure-registry option).
 - Service processes are spawned with `{ detached: true }` and stopped with
   `process.kill(-proc.pid, "SIGTERM")` (process group kill) so Dagger's
   port-forwarder children are terminated and the host TCP tunnel is released on stop.

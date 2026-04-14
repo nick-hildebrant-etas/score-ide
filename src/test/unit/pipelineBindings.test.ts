@@ -8,6 +8,7 @@ const ROOT = path.resolve(__dirname, "../../..");
 const PIPELINES_DIR = path.join(ROOT, "pipelines");
 const TEST_OTEL_PORT = 14318;
 const TEST_OCR_PORT = 18080;
+const TEST_PIP_PORT = 13141;
 
 function resolveServiceHost(): string {
   const override = process.env.SCORE_IDE_SERVICE_HOST?.trim();
@@ -153,6 +154,7 @@ suite("Pipeline service binding smoke tests (no browser)", function () {
 
   let ocrProc: cp.ChildProcess | undefined;
   let otelProc: cp.ChildProcess | undefined;
+  let pipProc: cp.ChildProcess | undefined;
   let serviceHost = "localhost";
 
   suiteSetup(async function () {
@@ -169,15 +171,22 @@ suite("Pipeline service binding smoke tests (no browser)", function () {
     );
     ocrProc = await ensureService(
       "ocr",
-      8080,
+      5000,
       TEST_OCR_PORT,
-      `http://localhost:${TEST_OCR_PORT}/`,
+      `http://localhost:${TEST_OCR_PORT}/v2/`,
+    );
+    pipProc = await ensureService(
+      "pip-mirror",
+      3141,
+      TEST_PIP_PORT,
+      `http://localhost:${TEST_PIP_PORT}/simple/`,
     );
   });
 
   suiteTeardown(() => {
     stopService(ocrProc);
     stopService(otelProc);
+    stopService(pipProc);
   });
 
   test("test-otel passes when otel service is running", () => {
@@ -196,5 +205,14 @@ suite("Pipeline service binding smoke tests (no browser)", function () {
       `tcp://${serviceHost}:${TEST_OCR_PORT}`,
     );
     assert.match(output, /ocr service reachable/);
+  });
+
+  test("test-pypi passes when pip-mirror service is running", () => {
+    const output = runPipeline(
+      "test-pypi",
+      "pip-mirror",
+      `tcp://${serviceHost}:${TEST_PIP_PORT}`,
+    );
+    assert.match(output, /pip-mirror service reachable/);
   });
 });

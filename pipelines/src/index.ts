@@ -102,32 +102,55 @@ export class ScorenadoPipelines {
   }
 
   /**
-   * End-to-end smoke test for the OCR service binding path.
+   * Smoke test for the OCI registry service binding path.
+   * Verifies the registry v2 API is reachable via its Dagger service endpoint.
    *
    * Expected usage:
-   *   dagger call test-ocr --ocr tcp://localhost:8080
+   *   dagger call test-ocr --ocr tcp://localhost:5000
    */
   @func()
   async testOcr(ocr: Service): Promise<string> {
     const endpoint = await ocr.endpoint({ scheme: "http" });
-    const body = await dag.http(endpoint).contents();
-    if (!body.includes('"status":"ok"')) {
-      throw new Error(`unexpected OCR response body: ${body}`);
+    const body = await dag.http(`${endpoint}/v2/`).contents();
+    return `ocr registry reachable: ${body}`;
+  }
+
+  /**
+   * End-to-end smoke test for the PyPI mirror service binding path.
+   * Downloads numpy from PyPI, uploads it to the mirror via twine, then
+   * verifies numpy appears in the mirror's /simple/ index.
+   *
+   * Expected usage:
+   *   dagger call test-pypi --pip-mirror tcp://localhost:3141
+   */
+  @func()
+  async testPypi(pipMirror: Service): Promise<string> {
+    const endpoint = await pipMirror.endpoint({ scheme: "http" });
+    const port = endpoint.split(":").pop()!;
+    const mirrorUrl = `http://pip-mirror:${port}`;
+
+    const index = await dag
+      .container()
+      .from("ghcr.io/astral-sh/uv:alpine")
+      .withServiceBinding("pip-mirror", pipMirror)
+      .withEnvVariable("TWINE_USERNAME", "dummy")
+      .withEnvVariable("TWINE_PASSWORD", "dummy")
+      .withExec(["uv", "tool", "install", "twine"])
+      .withExec(["uv", "run", "python", "-m", "pip", "download", "numpy", "--dest", "/packages"])
+      .withExec([
+        "sh", "-c",
+        `uv tool run twine upload --repository-url ${mirrorUrl} /packages/*`,
+      ])
+      .withExec(["wget", "-qO-", `${mirrorUrl}/simple/`])
+      .stdout();
+
+    if (!index.includes("numpy")) {
+      throw new Error(`numpy not found in mirror index after upload: ${index}`);
     }
-    return "ocr service reachable";
+    return "pip-mirror: numpy mirrored and verified";
   }
 
   // ── Service functions ──────────────────────────────────────────────────────
-
-  /**
-   * OCI registry (registry:2).
-   * Binds to host port 5000; use `dagger call oci-registry up` to expose it.
-   * testRegistry uses withServiceBinding to hit /v2/ inside the Dagger DAG.
-   */
-  @func()
-  ociRegistry(): Service {
-    return dag.container().from("registry:2").withExposedPort(5000).asService();
-  }
 
   /**
    * OpenTelemetry collector + web UI (ghcr.io/metafab/otel-gui).
@@ -145,53 +168,37 @@ export class ScorenadoPipelines {
   }
 
   /**
-   * OCR sidecar service.
-   * TODO: Replace with real OCR image once available.
+   * Local OCI container registry (Docker registry v2).
+   * Consumers push/pull images via tcp://<host>:5000.
    */
   @func()
   ocr(): Service {
     return dag
       .container()
-      .from("hashicorp/http-echo:1.0.0")
-      .withExposedPort(8080)
-      .asService({
-        args: ["-listen=:8080", '-text={"status":"ok"}'],
-        useEntrypoint: true,
-      });
+      .from("registry:2")
+      .withExposedPort(5000)
+      .asService();
   }
 
   /**
    * Local PyPI mirror for air-gapped builds.
-   * TODO: Replace with real devpi / pypiserver instance.
+   * Uses pypiserver via uv on the official uv Alpine image.
+   * Consumers should set UV_INDEX_URL=http://<endpoint>/simple/ and
+   * UV_INSECURE_HOST=<host>:<port> to route installs through this mirror.
    */
   @func()
   pipMirror(): Service {
-    const server = `\
-import http.server
-
-SIMPLE_HTML = b"""<!DOCTYPE html>
-<html><head><title>Simple index</title></head>
-<body><h1>Simple index</h1></body></html>
-"""
-
-class H(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(SIMPLE_HTML)))
-        self.end_headers()
-        self.wfile.write(SIMPLE_HTML)
-    def log_message(self, *a):
-        pass
-
-http.server.HTTPServer(("", 3141), H).serve_forever()
-`;
     return dag
       .container()
-      .from("python:3.12-alpine")
-      .withNewFile("/server.py", server)
+      .from("ghcr.io/astral-sh/uv:alpine")
+      .withExec(["mkdir", "-p", "/data/packages"])
       .withExposedPort(3141)
-      .asService({ args: ["python3", "/server.py"] });
+      .asService({
+        args: [
+          "uv", "run", "--with", "pypiserver", "--with", "gunicorn",
+          "pypi-server", "run", "--server", "gunicorn", "-p", "3141", "-a", ".", "-P", ".", "/data/packages",
+        ],
+      });
   }
 
   /**

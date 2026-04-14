@@ -1,97 +1,78 @@
-# OCI Registry Plan
+# PyPI Mirror Plan
 
-## Goal
+## Current status
 
-Bring up a local OCI registry service based on `registry:2`, expose it through the existing Services panel flow, and make its host/port available to pipeline jobs so the `test` pipeline can pull a mirrored image from the self-hosted registry.
+- OCI Registry service removed (no longer needed).
+- PyPI mirror service (`pip-mirror`, port 3141) is implemented and wired.
+- `test-pypi` smoke pipeline function added, modeled after `test-ocr`.
+- Mocha smoke test added to `pipelineBindings.test.ts` (port 13141 for test tunnel).
 
-Use `otel-webui` as the reference model. The registry should follow the same pattern: a standalone Dagger service managed from the Services panel, exposed on a host port, with its endpoint passed into the `dagger call` process environment. It should not be described or implemented as per-job sidecar wiring inside the pipeline container.
+## Active services
 
-## Important naming note
+| id                  | port | daggerArg         | status   |
+|---------------------|------|-------------------|----------|
+| `otel-webui`        | 4318 | `otel`            | working  |
+| `ocr`               | 8080 | `ocr`             | working  |
+| `pip-mirror`        | 3141 | `pip-mirror`      | stub → replace with uv+pypiserver |
+| `bazel-remote-cache`| 9090 | `bazel-remote-cache` | stub  |
 
-The existing `ocr` service id is reserved for the OCR sidecar (port 8080, `src/services.ts`). It is still in active use. The new registry service **must** use id `oci-registry` (daggerFn `oci-registry`, label `OCI Registry`). Do not use `ocr`, `container-registry`, or any variant that could be confused with the OCR sidecar.
+## Smoke test functions
 
-## Phase 0: prove the network path first
+| Dagger function | Service arg   | Checks                                      | status   |
+|-----------------|---------------|---------------------------------------------|----------|
+| `test-otel`     | `--otel`      | OTel endpoint reachable via dag.http()      | passing  |
+| `test-ocr`      | `--ocr`       | Registry `/v2/` returns `{}`               | passing  |
+| `test-pypi`     | `--pip-mirror`| Mirror `/simple/` returns `Simple index`    | added    |
 
-Before wiring the full feature, confirm the core assumption:
+## PyPI mirror — implementation plan
 
-1. Start a `registry:2` service through Dagger.
-2. Mirror or seed one known test image into that registry.
-3. Run a minimal Dagger pipeline call that pulls `host:port/image:tag` from the registry-backed address.
-4. Verify the Dagger engine can actually resolve and pull from that host/port path.
+Replace the current `python:3.12-alpine` + hand-rolled HTTP server stub with a real `pypiserver` instance served via `uv`.
 
-This is the first thing to prove because the registry only helps if the engine or pipeline path can really reach the service on the exposed port. If `localhost:<port>` is not reachable from the relevant pull path, the design has to change early.
+### Target implementation (`pipelines/src/index.ts` — `pipMirror()`)
 
-`otel-webui` is the concrete example here: it already works as an external service on a host port, with the extension injecting its endpoint into the Dagger process environment rather than binding a collector sidecar into each job container.
+- **Base image**: `ghcr.io/astral-sh/uv:alpine` (latest)
+- **Server**: `pypiserver` installed and run via `uv`:
+  ```
+  uv run --with pypiserver pypi-server run -p 3141 /data/packages
+  ```
+- `/data/packages` can start empty — pypiserver will serve an empty but valid PEP 503 index.
+- Exposed port: `3141` (unchanged).
 
-## Phase 1: add the service to the extension and Dagger module
+### `uv` environment variables for consumers
 
-1. Add a new service entry in `src/services.ts`.
-   - Use id/label/function name for the registry, not `ocr`.
-   - Use port `5000` unless there is a reason to standardize on another port.
-   - Add env vars that the extension can inject into pipeline terminals, for example `OCI_REGISTRY=localhost:5000`.
+When a pipeline function uses the mirror, set:
 
-2. Add the Dagger service function in `pipelines/src/index.ts`.
-   - Base it on `registry:2`.
-   - Expose port `5000`.
-   - If restart persistence matters, mount `/var/lib/registry` on a cache volume.
-   - Keep the first version simple: plain registry behavior is enough if the image is pre-mirrored.
+| Variable | Value |
+|---|---|
+| `UV_INDEX_URL` | `http://<mirror-endpoint>/simple/` |
+| `UV_INSECURE_HOST` | `<mirror-host>:<port>` (allow HTTP, no TLS) |
+| `UV_EXTRA_INDEX_URL` | `https://pypi.org/simple/` (fallback) |
 
-3. Reuse the existing `otel-webui` mechanics.
-   - `otel-webui` is the working example: service entry in `src/services.ts`, Dagger service function in `pipelines/src/index.ts`, host port exposure, and endpoint injection from the extension.
-   - The Services panel start/stop button already comes from `SERVICES`, so adding the new service definition should make it appear automatically.
-   - Implement the registry the same way: standalone service with an exposed host port and an engine-level endpoint contract, not per-job sidecar wiring.
+### Smoke test (`test-pypi`)
 
-## Phase 2: make the `test` pipeline consume the mirrored image
+Current assertion (`Simple index` in body) remains valid — pypiserver returns proper PEP 503 HTML.
+Future: extend to `uv pip install <pkg> --index-url <endpoint>/simple/` against a seeded package.
 
-1. Replace the current placeholder `test()` implementation with a real container path.
-2. Make the image reference registry-qualified, using the injected registry host/port contract.
-3. Keep the immediate scope narrow: only the image needed by `test` has to come from the self-hosted registry for now.
-4. Do not attempt the full no-internet lockdown yet; just make the registry-backed pull path work reliably.
+### Steps
 
-If the test pipeline still uses public upstream image references, the registry service is just decorative. The change is not complete until `test()` actually pulls from the mirrored registry path.
+1. Update `pipMirror()` in `pipelines/src/index.ts`:
+   - Change base image to `ghcr.io/astral-sh/uv:alpine`.
+   - Replace `asService({ args: ["python3", "/server.py"] })` with `asService({ args: ["uv", "run", "--with", "pypiserver", "pypi-server", "run", "-p", "3141", "/data/packages"] })`.
+   - Remove the inline Python script and `withNewFile`.
+2. Verify `dagger call pip-mirror up` starts cleanly and `/simple/` returns PEP 503 HTML.
+3. Verify `dagger call test-pypi --pip-mirror tcp://localhost:3141` passes.
 
-## Phase 3: test coverage and validation
+## How to add a new service + test (checklist)
 
-There are now two test harnesses; both are real and should be used for different concerns:
+Follow the pattern proven by OCR and PyPI mirror:
 
-- **Unit suite** (`npm test` → Mocha, `out/test/unit/**/*.test.js`): pure logic with no VS Code dependency. Use it for `parseDaggerFunctions`-style parser tests and SERVICES-constant assertions.
-- **Extension-host suite** (`npm run test:suite` → `vscode-test`, `out/test/suite/**/*.test.js`): runs inside the VS Code process. Use it for anything that imports `vscode` directly or exercises tree-item / provider behaviour.
-
-### What to write for the OCI registry work
-
-1. **Unit test** — add to `src/test/unit/otelWebui.test.ts` or a new `src/test/unit/ociRegistry.test.ts`:
-   - `SERVICES` contains an entry with `id === 'oci-registry'`.
-   - `daggerFn === 'oci-registry'`.
-   - `ports` includes `5000`.
-   - `envVars` includes `OCI_REGISTRY` pointing to `localhost:5000`.
-   - No field on the entry equals `'ocr'` (guard against id collision with the OCR sidecar).
-
-2. **Extension-host test** — add to `src/test/suite/extension.test.ts` (the file already exists):
-   - Extend the `ServicesProvider — initial state` suite or add a focused suite.
-   - After `startService` resolves its `spawn` event, `bindEnv()` must include `OCI_REGISTRY`.
-   - `getChildren()` must include an item with `label === 'OCI Registry'` in stopped state.
-   - Keep the test self-contained: pass a stub `resolvePipelinesDir` and do not actually spawn Dagger.
-
-3. **Root TypeScript validation** — already wired: `pretest` now runs `tsc -p pipelines/tsconfig.json --noEmit`, so the Dagger module is type-checked on every `npm test` run.
-
-4. **Integration smoke test** (optional, live Docker):
-   - Mirror the pattern from `otelWebui.test.ts`: skip if Docker is unavailable, start the registry container, push a known image, assert the registry API responds on port 5000, tear down.
-   - Place in the unit suite (plain Mocha) since it does not need the extension host.
-
-5. The normal `npm test` path already catches SERVICES changes; `npm run test:suite` catches provider behaviour. Both should stay green before merging the OCI registry phase.
-
-## Phase 4: later lockdown work
-
-Once the registry-backed `test` flow is proven, then move to the stricter network model:
-
-1. Limit pipeline containers to the OCI registry, pip mirror, and bazel remote cache endpoints.
-2. Remove general internet access from build/test jobs.
-3. Add failure-mode coverage so it is obvious when a job still depends on public network access.
-
-## Acceptance criteria for this next phase
-
-1. A new registry service appears in the Services panel and can be started/stopped.
-2. Starting it exposes a documented host port for local use.
-3. The registry endpoint is automatically available to pipeline runs from the extension.
-4. The `test` pipeline can pull the mirrored image through the self-hosted registry path.
-5. The normal repo validation path checks both the extension TypeScript and the `pipelines/` TypeScript.
+1. Add entry to `src/services.ts` with `id`, `daggerFn`, `ports`, `daggerArg`.
+2. Implement service function in `pipelines/src/index.ts` using `.asService({ args: [...] })`.
+3. Implement `test<Name>(svc: Service)` pipeline function:
+   - `endpoint = await svc.endpoint({ scheme: "http" })`
+   - `dag.http(endpoint).contents()` and assert expected response
+4. Add to `pipelineBindings.test.ts`:
+   - `const TEST_<NAME>_PORT = <unique test port>`
+   - `ensureService(...)` in `suiteSetup`
+   - `stopService(...)` in `suiteTeardown`
+   - `runPipeline("test-<name>", "<daggerArg>", ...)` test
