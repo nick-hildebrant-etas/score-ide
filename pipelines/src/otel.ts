@@ -25,6 +25,11 @@ export function otelWebuiService(): Service {
 
 export async function smokeTestOtel(otel: Service): Promise<string> {
   const endpoint = await otel.endpoint({ scheme: "http" });
-  await dag.http(endpoint).contents();
+  await dag
+    .container()
+    .from("alpine")
+    .withServiceBinding("otel", otel)
+    .withExec(["wget", "-qO-", endpoint])
+    .stdout();
   return "otel service reachable";
 }

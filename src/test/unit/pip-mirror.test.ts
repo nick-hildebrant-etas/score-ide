@@ -4,9 +4,9 @@
  * Static suite: verifies the service definition in src/services.ts has the
  * correct id, daggerFn, and port — no Docker required.
  *
- * Live suite: starts the uv/pypiserver container and verifies the /simple/
- * index endpoint is reachable. Full round-trip (download + upload + verify)
- * is covered by the Dagger smoke test (test-pypi) in pipelineBindings.test.ts.
+ * Live suite: starts a python:3-alpine container with pypiserver+gunicorn
+ * pre-installed (matches the Dagger service definition) and verifies the
+ * /simple/ index endpoint is reachable.
  */
 
 import * as assert from 'assert';
@@ -14,7 +14,7 @@ import * as cp from 'child_process';
 import { SERVICES } from '../../services';
 
 const CONTAINER = 'scorenado-pip-mirror-test';
-const IMAGE = 'ghcr.io/astral-sh/uv:alpine';
+const IMAGE = 'python:3-alpine';
 const TEST_PORT = 13142; // offset from the default 3141 to avoid collisions
 const BASE = `http://localhost:${TEST_PORT}`;
 
@@ -60,25 +60,40 @@ suite('PyPI mirror — service definition', () => {
 // ── Live container checks ─────────────────────────────────────────────────────
 
 suite('PyPI mirror — live container', function () {
-  // uv needs to download pypiserver + gunicorn on first run; allow extra time.
-  this.timeout(120_000);
+  this.timeout(60_000);
 
   suiteSetup(async function () {
     if (!dockerAvailable()) { this.skip(); }
+    // Build a throwaway image with pypiserver+gunicorn pre-installed so the
+    // container starts immediately (no runtime package downloads).
+    cp.spawnSync('docker', [
+      'build', '--quiet', '-t', `${CONTAINER}-img`,
+      '--build-arg', 'IMAGE=' + IMAGE,
+      '-',
+    ], {
+      input: [
+        `ARG IMAGE`,
+        `FROM \${IMAGE}`,
+        `RUN pip install --no-cache-dir "pypiserver[passlib]" gunicorn`,
+        `RUN mkdir -p /data/packages`,
+      ].join('\n'),
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
     cp.spawnSync('docker', [
       'run', '-d', '--rm', '--name', CONTAINER,
       '-p', `${TEST_PORT}:3141`,
-      '--entrypoint', 'sh',
-      IMAGE,
-      '-c',
-      'mkdir -p /data/packages && uv run --with pypiserver --with gunicorn ' +
-      'pypi-server run --server gunicorn -p 3141 -a . -P . /data/packages',
+      `${CONTAINER}-img`,
+      'pypi-server', 'run',
+      '--server', 'gunicorn',
+      '-p', '3141', '-a', '.', '-P', '.', '/data/packages',
     ], { stdio: 'pipe' });
     await waitReady(`${BASE}/simple/`);
   });
 
   suiteTeardown(() => {
     cp.spawnSync('docker', ['stop', CONTAINER], { stdio: 'ignore' });
+    cp.spawnSync('docker', ['rmi', `${CONTAINER}-img`], { stdio: 'ignore' });
   });
 
   test('/simple/ index responds 200', async () => {

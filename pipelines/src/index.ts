@@ -19,9 +19,14 @@
  *   dagger call build --repo score-base --source <workspace>
  *   dagger call test  --repo score-base --source <workspace>
  *   dagger call shell --repo score-base --source <workspace>
+ *   dagger call smoke-otel
+ *   dagger call smoke-ocr
+ *   dagger call smoke-pypi
+ *   dagger call smoke-bazel-cache
  *   dagger call test-otel --otel tcp://localhost:4318
  *   dagger call test-ocr  --ocr  tcp://localhost:5000
  *   dagger call test-pypi --pip-mirror tcp://localhost:3141
+ *   dagger call test-bazel-cache --bazel-cache tcp://localhost:9090
  *   dagger call otel-webui up
  *   dagger call ocr up
  *   dagger call pip-mirror up
@@ -31,13 +36,14 @@ import {
   Container,
   Directory,
   Service,
+  dag,
   object,
   func,
 } from "@dagger.io/dagger";
 import { otelWebuiService, smokeTestOtel } from "./otel.js";
 import { ociRegistryService, smokeTestOcr } from "./registry.js";
 import { pipMirrorService, smokeTestPypi } from "./pip-mirror.js";
-import { bazelRemoteCacheService } from "./bazel.js";
+import { bazelRemoteCacheService, smokeTestBazelCache } from "./bazel.js";
 import { setupWorkspace } from "./setup.js";
 import { bazelBuild, bazelTest, bazelShell } from "./ci.js";
 
@@ -105,39 +111,91 @@ export class ScorenadoPipelines {
   }
 
   /**
-   * End-to-end smoke test for the OTel service binding path.
+   * Verify the OTel service injected by the extension is reachable.
+   * Uses svc.endpoint() + dag.http() — works against real TCP tunnels from the extension.
    *
    * Expected usage:
    *   dagger call test-otel --otel tcp://localhost:4318
    */
   @func()
   async testOtel(otel: Service): Promise<string> {
-    return smokeTestOtel(otel);
+    const endpoint = await otel.endpoint({ scheme: "http" });
+    await dag.http(endpoint).contents();
+    return "otel service reachable";
   }
 
   /**
-   * Smoke test for the OCI registry service binding path.
-   * Verifies the registry v2 API is reachable via its Dagger service endpoint.
+   * Verify the OCI registry injected by the extension is reachable.
+   * Uses svc.endpoint() + dag.http() — works against real TCP tunnels from the extension.
    *
    * Expected usage:
    *   dagger call test-ocr --ocr tcp://localhost:5000
    */
   @func()
   async testOcr(ocr: Service): Promise<string> {
-    return smokeTestOcr(ocr);
+    const endpoint = await ocr.endpoint({ scheme: "http" });
+    await dag.http(`${endpoint}/v2/`).contents();
+    return "ocr registry reachable";
   }
 
   /**
-   * End-to-end smoke test for the PyPI mirror service binding path.
-   * Downloads numpy from PyPI, uploads it to the mirror via twine, then
-   * verifies numpy appears in the mirror's /simple/ index.
+   * Verify the PyPI mirror injected by the extension serves a valid index.
+   * Uses svc.endpoint() + dag.http() — works against real TCP tunnels from the extension.
    *
    * Expected usage:
    *   dagger call test-pypi --pip-mirror tcp://localhost:3141
    */
   @func()
   async testPypi(pipMirror: Service): Promise<string> {
-    return smokeTestPypi(pipMirror);
+    const endpoint = await pipMirror.endpoint({ scheme: "http" });
+    const body = await dag.http(`${endpoint}/simple/`).contents();
+    if (!body.toLowerCase().includes("simple index")) {
+      throw new Error(`pip-mirror /simple/ did not return PEP 503 index: ${body}`);
+    }
+    return "pip-mirror: /simple/ returns PEP 503 Simple index";
+  }
+
+  /**
+   * Verify the Bazel remote cache injected by the extension is reachable.
+   * Uses svc.endpoint() + dag.http() — works against real TCP tunnels from the extension.
+   *
+   * Expected usage:
+   *   dagger call test-bazel-cache --bazel-cache tcp://localhost:9090
+   */
+  @func()
+  async testBazelCache(bazelCache: Service): Promise<string> {
+    const endpoint = await bazelCache.endpoint({ scheme: "http" });
+    const body = await dag.http(`${endpoint}/status`).contents();
+    if (!body.includes('"state"')) {
+      throw new Error(`bazel-remote-cache /status unexpected response: ${body}`);
+    }
+    return "bazel-remote-cache: /status ok";
+  }
+
+  // ── Self-contained smoke tests (service lifecycle managed by Dagger) ─────────
+
+  /** Start otel-webui and verify it responds. No external service needed. */
+  @func()
+  async smokeOtel(): Promise<string> {
+    return smokeTestOtel(otelWebuiService());
+  }
+
+  /** Start ocr registry and verify /v2/ responds. No external service needed. */
+  @func()
+  async smokeOcr(): Promise<string> {
+    return smokeTestOcr(ociRegistryService());
+  }
+
+  /** Start pip-mirror and verify /simple/ responds. No external service needed. */
+  @func()
+  async smokePypi(): Promise<string> {
+    return smokeTestPypi(pipMirrorService());
+  }
+
+  /** Start bazel-remote-cache and verify /status responds. No external service needed. */
+  @func()
+  async smokeBazelCache(): Promise<string> {
+    return smokeTestBazelCache(bazelRemoteCacheService());
   }
 
   // ── Service functions ──────────────────────────────────────────────────────

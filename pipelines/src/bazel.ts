@@ -17,6 +17,20 @@
  */
 import { dag, Service } from "@dagger.io/dagger";
 
+export async function smokeTestBazelCache(bazelCache: Service): Promise<string> {
+  const endpoint = await bazelCache.endpoint({ scheme: "http" });
+  const body = await dag
+    .container()
+    .from("alpine")
+    .withServiceBinding("bazel-cache", bazelCache)
+    .withExec(["wget", "-qO-", `${endpoint}/status`])
+    .stdout();
+  if (!body.includes('"state"')) {
+    throw new Error(`bazel-remote-cache /status unexpected response: ${body}`);
+  }
+  return "bazel-remote-cache: /status ok";
+}
+
 export function bazelRemoteCacheService(): Service {
   const server = `\
 import http.server

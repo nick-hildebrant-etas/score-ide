@@ -23,6 +23,14 @@ export function ociRegistryService(): Service {
 
 export async function smokeTestOcr(ocr: Service): Promise<string> {
   const endpoint = await ocr.endpoint({ scheme: "http" });
-  await dag.http(`${endpoint}/v2/`).contents();
-  return "ocr service reachable";
+  // dag.http() runs at the engine level and cannot resolve Dagger-internal
+  // service hostnames. Use a container with withServiceBinding so the request
+  // runs inside the service network where the hostname is resolvable.
+  await dag
+    .container()
+    .from("alpine")
+    .withServiceBinding("ocr", ocr)
+    .withExec(["wget", "-qO-", `${endpoint}/v2/`])
+    .stdout();
+  return "ocr registry reachable";
 }

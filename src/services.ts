@@ -49,12 +49,14 @@ export const SERVICES: ServiceDef[] = [
     daggerFn: "pip-mirror",
     ports: [3141],
     daggerArg: "pip-mirror",
+    browserPath: "/simple/",
   },
   {
     id: "bazel-remote-cache",
     label: "Bazel Remote Cache",
     daggerFn: "bazel-remote-cache",
     ports: [9090],
-    daggerArg: "bazel-remote-cache",
+    daggerArg: "bazel-cache",
+    browserPath: "/status",
   },
 ];
